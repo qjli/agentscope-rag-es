@@ -34,3 +34,12 @@ npm run build
 ## API 前缀
 
 `/api/v1/ops/knowledge-bases/*`
+
+## 知识库持久化
+
+新建知识库写入 `data/knowledge-bases.json`（路径相对**后端启动目录**解析为绝对路径）。  
+请始终在同一目录执行 `mvn spring-boot:run`，或设置绝对路径：
+
+```bash
+export RAG_OPS_REGISTRY_FILE=/path/to/03-simple-es-code/data/knowledge-bases.json
+```

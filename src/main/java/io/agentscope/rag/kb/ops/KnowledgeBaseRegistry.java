@@ -8,7 +8,7 @@ import io.agentscope.core.rag.exception.VectorStoreException;
 import io.agentscope.core.rag.knowledge.SimpleKnowledge;
 import io.agentscope.core.rag.store.ElasticsearchStore;
 import io.agentscope.core.rag.store.VDBStoreBase;
-import io.agentscope.rag.kb.config.OpsProperties;
+import io.agentscope.rag.kb.config.OpsDataPaths;
 import io.agentscope.rag.kb.config.SimpleRagProperties;
 import io.agentscope.rag.kb.store.ElasticsearchDocMaintenance;
 import jakarta.annotation.PostConstruct;
@@ -35,7 +35,7 @@ public class KnowledgeBaseRegistry {
     private static final Logger log = LoggerFactory.getLogger(KnowledgeBaseRegistry.class);
 
     private final SimpleRagProperties properties;
-    private final OpsProperties opsProperties;
+    private final OpsDataPaths opsDataPaths;
     private final EmbeddingModel embeddingModel;
     private final ObjectMapper objectMapper;
     private final Optional<VDBStoreBase> defaultVectorStore;
@@ -46,13 +46,13 @@ public class KnowledgeBaseRegistry {
 
     public KnowledgeBaseRegistry(
             SimpleRagProperties properties,
-            OpsProperties opsProperties,
+            OpsDataPaths opsDataPaths,
             EmbeddingModel embeddingModel,
             ObjectMapper objectMapper,
             @Autowired(required = false) VDBStoreBase kbVectorStore,
             @Autowired(required = false) ElasticsearchDocMaintenance esMaintenance) {
         this.properties = properties;
-        this.opsProperties = opsProperties;
+        this.opsDataPaths = opsDataPaths;
         this.embeddingModel = embeddingModel;
         this.objectMapper = objectMapper;
         this.defaultVectorStore = Optional.ofNullable(kbVectorStore);
@@ -61,22 +61,8 @@ public class KnowledgeBaseRegistry {
 
     @PostConstruct
     void init() throws IOException {
-        Path dataDir = Path.of(opsProperties.getDataDir());
-        Files.createDirectories(dataDir);
-        Files.createDirectories(Path.of(opsProperties.getUploadDir()));
-
         loadPersistedDescriptors();
-
-        SimpleRagProperties.ElasticsearchProperties es = properties.getElasticsearch();
-        KnowledgeBaseDescriptor builtIn =
-                new KnowledgeBaseDescriptor(
-                        DEFAULT_KB_ID,
-                        "默认知识库",
-                        es.getIndexName(),
-                        "来自 application.yml 的默认 ES 索引",
-                        Instant.now(),
-                        true);
-        descriptors.put(DEFAULT_KB_ID, builtIn);
+        registerBuiltInDefault();
         for (KnowledgeBaseDescriptor descriptor : List.copyOf(descriptors.values())) {
             if (properties.getStoreType() != SimpleRagProperties.StoreType.ELASTICSEARCH
                     && !DEFAULT_KB_ID.equals(descriptor.getId())) {
@@ -84,7 +70,34 @@ public class KnowledgeBaseRegistry {
             }
             ensureRuntime(descriptor);
         }
-        persistDescriptors();
+        log.info(
+                "Knowledge bases loaded: {} (registry={})",
+                descriptors.keySet(),
+                opsDataPaths.getRegistryFile());
+    }
+
+    private void registerBuiltInDefault() {
+        SimpleRagProperties.ElasticsearchProperties es = properties.getElasticsearch();
+        KnowledgeBaseDescriptor existing = descriptors.get(DEFAULT_KB_ID);
+        if (existing == null) {
+            descriptors.put(
+                    DEFAULT_KB_ID,
+                    new KnowledgeBaseDescriptor(
+                            DEFAULT_KB_ID,
+                            "默认知识库",
+                            es.getIndexName(),
+                            "来自 application.yml 的默认 ES 索引",
+                            Instant.now(),
+                            true));
+        } else {
+            existing.setDisplayName(
+                    existing.getDisplayName() != null ? existing.getDisplayName() : "默认知识库");
+            existing.setIndexName(es.getIndexName());
+            existing.setBuiltIn(true);
+            if (existing.getDescription() == null || existing.getDescription().isBlank()) {
+                existing.setDescription("来自 application.yml 的默认 ES 索引");
+            }
+        }
     }
 
     @PreDestroy
@@ -142,32 +155,38 @@ public class KnowledgeBaseRegistry {
     }
 
     private void loadPersistedDescriptors() throws IOException {
-        Path file = Path.of(opsProperties.getRegistryFile());
+        Path file = opsDataPaths.getRegistryFile();
         if (!Files.exists(file)) {
+            log.info("No registry file yet at {}", file);
             return;
         }
         List<KnowledgeBaseDescriptor> loaded =
                 objectMapper.readValue(file.toFile(), new TypeReference<List<KnowledgeBaseDescriptor>>() {});
+        int count = 0;
         for (KnowledgeBaseDescriptor descriptor : loaded) {
             if (descriptor.getId() == null || descriptor.getId().isBlank()) {
                 continue;
             }
             if (DEFAULT_KB_ID.equals(descriptor.getId())) {
+                descriptors.put(descriptor.getId(), descriptor);
                 continue;
             }
             if (properties.getStoreType() == SimpleRagProperties.StoreType.ELASTICSEARCH) {
                 descriptors.put(descriptor.getId(), descriptor);
+                count++;
             }
         }
+        log.info("Loaded {} custom knowledge base(s) from {}", count, file);
     }
 
     private void persistDescriptors() {
+        Path file = opsDataPaths.getRegistryFile();
         try {
-            Path file = Path.of(opsProperties.getRegistryFile());
             Files.createDirectories(file.getParent());
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(file.toFile(), listDescriptors());
+            log.debug("Persisted {} knowledge base(s) to {}", descriptors.size(), file);
         } catch (IOException e) {
-            log.warn("Failed to persist knowledge base registry: {}", e.getMessage());
+            throw new IllegalStateException("Failed to persist knowledge base registry to " + file, e);
         }
     }
 

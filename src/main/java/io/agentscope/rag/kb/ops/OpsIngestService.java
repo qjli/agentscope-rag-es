@@ -7,7 +7,7 @@ import io.agentscope.core.rag.reader.Reader;
 import io.agentscope.core.rag.reader.ReaderInput;
 import io.agentscope.core.rag.reader.TextReader;
 import io.agentscope.core.rag.reader.WordReader;
-import io.agentscope.rag.kb.config.OpsProperties;
+import io.agentscope.rag.kb.config.OpsDataPaths;
 import io.agentscope.rag.kb.faq.KbIndexRegistry;
 import io.agentscope.rag.kb.ingest.DocumentIngestRequest;
 import io.agentscope.rag.kb.ingest.IngestResult;
@@ -36,7 +36,7 @@ public class OpsIngestService {
     private final WordReader wordReader;
     private final PDFReader pdfReader;
     private final KbIndexRegistry kbIndexRegistry;
-    private final OpsProperties opsProperties;
+    private final OpsDataPaths opsDataPaths;
 
     public OpsIngestService(
             KnowledgeBaseRegistry registry,
@@ -44,13 +44,13 @@ public class OpsIngestService {
             WordReader kbWordReader,
             PDFReader kbPdfReader,
             KbIndexRegistry kbIndexRegistry,
-            OpsProperties opsProperties) {
+            OpsDataPaths opsDataPaths) {
         this.registry = registry;
         this.textReader = kbTextReader;
         this.wordReader = kbWordReader;
         this.pdfReader = kbPdfReader;
         this.kbIndexRegistry = kbIndexRegistry;
-        this.opsProperties = opsProperties;
+        this.opsDataPaths = opsDataPaths;
     }
 
     public IngestResult ingestText(String kbId, DocumentIngestRequest request, boolean replaceExisting) {
@@ -191,7 +191,7 @@ public class OpsIngestService {
     private Path saveUpload(MultipartFile file) throws IOException {
         String original = file.getOriginalFilename() != null ? file.getOriginalFilename() : "upload.bin";
         String safeName = original.replaceAll("[^a-zA-Z0-9._-]", "_");
-        Path dir = Path.of(opsProperties.getUploadDir());
+        Path dir = opsDataPaths.getUploadDir();
         Files.createDirectories(dir);
         Path target = dir.resolve(UUID.randomUUID() + "_" + safeName);
         file.transferTo(target);

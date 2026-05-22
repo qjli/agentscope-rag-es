@@ -17,6 +17,8 @@ interface KbContextValue {
   loading: boolean;
   error: string | null;
   setSelectedKbId: (id: string) => void;
+  /** 切换知识库（与 setSelectedKbId 相同，语义更明确） */
+  selectKnowledgeBase: (id: string) => void;
   refresh: () => Promise<void>;
   createKb: (payload: {
     id: string;
@@ -75,6 +77,10 @@ export function KbProvider({ children }: { children: ReactNode }) {
     [knowledgeBases, selectedKbId],
   );
 
+  const selectKnowledgeBase = useCallback((id: string) => {
+    setSelectedKbId(id);
+  }, []);
+
   const value = useMemo(
     () => ({
       knowledgeBases,
@@ -82,7 +88,8 @@ export function KbProvider({ children }: { children: ReactNode }) {
       selectedKb,
       loading,
       error,
-      setSelectedKbId,
+      setSelectedKbId: selectKnowledgeBase,
+      selectKnowledgeBase,
       refresh,
       createKb,
     }),
@@ -92,6 +99,7 @@ export function KbProvider({ children }: { children: ReactNode }) {
       selectedKb,
       loading,
       error,
+      selectKnowledgeBase,
       refresh,
       createKb,
     ],

@@ -82,7 +82,8 @@ export function Layout() {
         </header>
 
         <main className="flex-1 overflow-auto p-8">
-          <Outlet />
+          {/* 切换知识库时 remount 子路由，刷新 Dashboard / 文档 / 对话 */}
+          <Outlet key={selectedKbId} />
         </main>
       </div>
 

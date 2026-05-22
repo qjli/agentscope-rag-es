@@ -33,7 +33,10 @@ export function DocumentsPage() {
   };
 
   useEffect(() => {
+    setError(null);
+    setRows([]);
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 切换知识库时重新拉取列表
   }, [selectedKbId]);
 
   async function handleIngest(e: React.FormEvent) {

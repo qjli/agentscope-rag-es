@@ -27,7 +27,7 @@ function RetrievalPanel({
   chunks: RetrievedChunk[];
   defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(defaultOpen ?? chunks.length > 0);
+  const [open, setOpen] = useState(defaultOpen ?? false);
 
   return (
     <div className="mb-3 rounded-xl border border-teal-200/80 bg-teal-50/60">
@@ -173,11 +173,7 @@ export function ChatPage() {
                 <Bot className="h-5 w-5 text-violet-600" />
               </div>
               <div className="max-w-[85%] flex-1">
-                <RetrievalPanel
-                  query={msg.query}
-                  chunks={msg.retrieved}
-                  defaultOpen={msg.retrieved.length > 0}
-                />
+                <RetrievalPanel query={msg.query} chunks={msg.retrieved} />
                 <div className="rounded-2xl bg-violet-50 px-4 py-3 ring-1 ring-violet-100">
                   <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-violet-600">
                     模型回答

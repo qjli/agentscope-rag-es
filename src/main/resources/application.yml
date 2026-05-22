@@ -63,6 +63,7 @@ agentscope:
       你是企业知识库助手。请严格依据检索到的知识库内容回答；
       若知识库无相关内容，请明确告知用户并建议联系人工客服，不要编造。
 
+# 相对路径均相对「进程启动目录 user.dir」解析为绝对路径（见 OpsDataPaths）
 agentscope.rag.ops:
   data-dir: ${RAG_OPS_DATA_DIR:./data}
   upload-dir: ${RAG_OPS_UPLOAD_DIR:./data/uploads}

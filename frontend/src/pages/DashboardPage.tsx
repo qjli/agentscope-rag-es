@@ -23,12 +23,20 @@ export function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     setDash(null);
     setError(null);
     api
       .dashboard(selectedKbId)
-      .then(setDash)
-      .catch((e) => setError(e instanceof Error ? e.message : "加载失败"));
+      .then((data) => {
+        if (!cancelled) setDash(data);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : "加载失败");
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedKbId]);
 
   if (error) {
