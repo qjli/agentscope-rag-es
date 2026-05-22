@@ -21,10 +21,22 @@
     <properties>
         <java.version>17</java.version>
         <agentscope.version>1.1.0-RC2</agentscope.version>
+        <!-- AgentScope ElasticsearchStore 需要 9.x + rest5-client；Spring Boot BOM 默认为 8.15.x -->
+        <elasticsearch.version>9.3.3</elasticsearch.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>co.elastic.clients</groupId>
+                <artifactId>elasticsearch-java</artifactId>
+                <version>${elasticsearch.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>co.elastic.clients</groupId>
+                <artifactId>elasticsearch-rest5-client</artifactId>
+                <version>${elasticsearch.version}</version>
+            </dependency>
             <dependency>
                 <groupId>io.agentscope</groupId>
                 <artifactId>agentscope-bom</artifactId>
@@ -60,6 +72,15 @@
         <dependency>
             <groupId>io.agentscope</groupId>
             <artifactId>agentscope-extensions-rag-simple</artifactId>
+        </dependency>
+        <!-- ElasticsearchStore 运行时依赖（与 agentscope-bom 9.3.3 对齐，覆盖 Spring Boot 8.x） -->
+        <dependency>
+            <groupId>co.elastic.clients</groupId>
+            <artifactId>elasticsearch-java</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>co.elastic.clients</groupId>
+            <artifactId>elasticsearch-rest5-client</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springdoc</groupId>
