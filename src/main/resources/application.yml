@@ -1,0 +1,64 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: simple-es-rag
+  mvc:
+    throw-exception-if-no-handler-found: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when_authorized
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+# SimpleKnowledge + ElasticsearchStore（见 README-vES.md）
+agentscope:
+  rag:
+    simple:
+      enabled: true
+      store-type: ${RAG_STORE_TYPE:elasticsearch}
+      embedding:
+        api-key: ${DASHSCOPE_API_KEY:sk-your-dashscope-api-key}
+        model-name: ${DASHSCOPE_EMBEDDING_MODEL:text-embedding-v3}
+        dimensions: 1024
+      elasticsearch:
+        url: ${ES_URL:http://localhost:9200}
+        index-name: ${ES_INDEX:agentscope_kb}
+        username: ${ES_USERNAME:}
+        password: ${ES_PASSWORD:}
+      reader:
+        chunk-size: 1024
+        split-strategy: PARAGRAPH
+        chunk-overlap: 50
+      retrieve:
+        limit: 5
+        score-threshold: 0.35
+      faq:
+        bootstrap-on-startup: ${FAQ_BOOTSTRAP:false}
+        data-location: classpath:faq/faq-items.json
+        reload-enabled: true
+
+  agent:
+    enabled: true
+    dashscope-api-key: ${DASHSCOPE_API_KEY:sk-your-dashscope-api-key}
+    model-name: ${DASHSCOPE_MODEL_NAME:qwen-plus}
+    rag-mode: ${AGENT_RAG_MODE:GENERIC}
+    retrieve:
+      limit: 3
+      score-threshold: 0.35
+    system-prompt: |
+      你是企业知识库助手。请严格依据检索到的知识库内容回答；
+      若知识库无相关内容，请明确告知用户并建议联系人工客服，不要编造。
+
+logging:
+  level:
+    io.agentscope.rag.kb: DEBUG
