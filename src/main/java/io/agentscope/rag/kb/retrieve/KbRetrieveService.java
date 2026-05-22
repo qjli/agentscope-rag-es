@@ -15,6 +15,9 @@ import org.springframework.stereotype.Service;
 @Service
 public class KbRetrieveService {
 
+    /** ES kNN：numCandidates = max(limit*2, 50)，须 ≤ 10000，故 limit 最大 5000；业务侧限制 100 即可。 */
+    private static final int MAX_RETRIEVE_LIMIT = 100;
+
     private final Knowledge kbKnowledge;
     private final RetrieveConfig defaultRetrieveConfig;
     private final KbIndexRegistry registry;
@@ -34,13 +37,12 @@ public class KbRetrieveService {
     public List<DocumentDto> retrieve(RetrieveRequest request) {
         ensureKnowledgeAvailable();
 
+        int limit = resolveLimit(request.getLimit());
+
         RetrieveConfig config =
                 defaultRetrieveConfig
                         .mutate()
-                        .limit(
-                                request.getLimit() != null
-                                        ? request.getLimit()
-                                        : defaultRetrieveConfig.getLimit())
+                        .limit(limit)
                         .scoreThreshold(
                                 request.getScoreThreshold() != null
                                         ? request.getScoreThreshold()
@@ -51,6 +53,21 @@ public class KbRetrieveService {
                 kbKnowledge.retrieve(request.getQuery().trim(), config).blockOptional().orElse(List.of());
 
         return documents.stream().map(DocumentDto::from).toList();
+    }
+
+    private int resolveLimit(Integer requestLimit) {
+        int limit =
+                requestLimit != null ? requestLimit : defaultRetrieveConfig.getLimit();
+        if (limit < 1) {
+            throw new IllegalArgumentException("retrieve limit must be >= 1");
+        }
+        if (limit > MAX_RETRIEVE_LIMIT) {
+            throw new IllegalArgumentException(
+                    "retrieve limit must be <= "
+                            + MAX_RETRIEVE_LIMIT
+                            + " (Elasticsearch numCandidates = limit*2 cannot exceed 10000)");
+        }
+        return limit;
     }
 
     private void ensureKnowledgeAvailable() {

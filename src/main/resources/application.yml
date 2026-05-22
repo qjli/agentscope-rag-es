@@ -27,7 +27,7 @@ agentscope:
       enabled: true
       store-type: ${RAG_STORE_TYPE:elasticsearch}
       embedding:
-        api-key: ${DASHSCOPE_API_KEY:sk-your-dashscope-api-key}
+        api-key: ${DASHSCOPE_API_KEY:sk-76aec4a6346242f997e85dbc75062b28}
         model-name: ${DASHSCOPE_EMBEDDING_MODEL:text-embedding-v3}
         dimensions: 1024
       elasticsearch:
@@ -49,7 +49,7 @@ agentscope:
 
   agent:
     enabled: true
-    dashscope-api-key: ${DASHSCOPE_API_KEY:sk-your-dashscope-api-key}
+    dashscope-api-key: ${DASHSCOPE_API_KEY:sk-76aec4a6346242f997e85dbc75062b28}
     model-name: ${DASHSCOPE_MODEL_NAME:qwen-plus}
     rag-mode: ${AGENT_RAG_MODE:GENERIC}
     retrieve:

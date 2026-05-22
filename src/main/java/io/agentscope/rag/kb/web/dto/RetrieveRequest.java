@@ -1,5 +1,7 @@
 package io.agentscope.rag.kb.web.dto;
 
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
@@ -9,6 +11,11 @@ public class RetrieveRequest {
     @Size(max = 4000)
     private String query;
 
+    /**
+     * Top-K。ElasticsearchStore 内部 numCandidates = max(limit*2, 50)，ES 要求 numCandidates ≤ 10000。
+     */
+    @Min(1)
+    @Max(100)
     private Integer limit;
 
     private Double scoreThreshold;
