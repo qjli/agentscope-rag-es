@@ -1,228 +1,245 @@
 # SimpleKnowledge + Elasticsearch 知识库服务
 
-把企业文档变成「可检索、可对话」的知识库：文本入库 → 向量写入 **Elasticsearch** → 用户提问时先检索再让大模型回答（RAG）。
+把企业文档变成「可检索、可对话」的知识库：文本入库 → 向量写入 **Elasticsearch** → 提问时先检索再让大模型回答（RAG）。
 
 | 项 | 值 |
 |----|-----|
 | 端口 | `8082` |
 | 框架 | AgentScope Java `1.1.0-RC2` + Spring Boot 3.4 |
-| 向量库 | `ElasticsearchStore`（默认） |
-| ES 索引 | `agentscope_kb` |
+| 向量库 | `ElasticsearchStore`（默认，`store-type=elasticsearch`） |
+| ES 索引 | `agentscope_kb`（可配置） |
 | Embedding | DashScope `text-embedding-v3`，**1024 维** |
+| 仓库 | https://github.com/qjli/agentscope-rag-es |
 
-方案背景见 [README-vES.md](../README-vES.md)。代码仓库：https://github.com/qjli/agentscope-rag-es
-
----
-
-## 一、用一句话理解本项目
-
-**你们写 Spring API 管业务；AgentScope 管「切块 + 向量化 + 检索」；Elasticsearch 管「向量存哪儿」。**
-
-```
-用户 / 运营
-    ↓ HTTP
-本服务（03-simple-es-code）
-    ↓ 调用
-SimpleKnowledge（AgentScope）
-    ↓ 读写
-Elasticsearch（向量索引）
-    ↓ 调用
-DashScope（Embedding 把文字变向量，Chat 生成回答）
-```
+方案设计见 [README-vES.md](../README-vES.md)。
 
 ---
 
-## 二、核心原理（分层说明）
+## 目录
 
-### 2.1 三层分工
+1. [一句话理解](#一句话理解)
+2. [核心原理](#核心原理)
+3. [代码审视结论](#代码审视结论)
+4. [项目结构与关键类](#项目结构与关键类)
+5. [配置说明](#配置说明)
+6. [快速开始](#快速开始)
+7. [API 说明](#api-说明)
+8. [常见问题](#常见问题)
+9. [与 02 对比](#与-02-simple-kg-code-对比)
+
+---
+
+## 一句话理解
+
+**Spring 管 HTTP 和 `doc_id` 运维；AgentScope 管切块、向量化、检索；Elasticsearch 存向量并用 kNN 找相似段；DashScope 负责 Embedding 和对话。**
+
+本工程**不实现**向量索引算法（无自研 ANN），向量检索由 ES + AgentScope `ElasticsearchStore` 完成。
+
+---
+
+## 核心原理
+
+### 分层职责
 
 ```mermaid
 flowchart TB
-    subgraph app["本工程 io.agentscope.rag.kb"]
-        API[REST API]
-        ING[IngestService]
-        MAINT[ElasticsearchDocMaintenance]
-        API --> ING
-        API --> MAINT
+    subgraph app["本工程"]
+        C[Controller]
+        I[IngestService]
+        M[ElasticsearchDocMaintenance]
+        C --> I & M
     end
-
-    subgraph as["AgentScope（库内实现）"]
+    subgraph as["AgentScope"]
         SK[SimpleKnowledge]
-        EM[EmbeddingModel]
-        TR[TextReader]
         VS[ElasticsearchStore]
         AG[ReActAgent]
-        SK --> EM
         SK --> VS
-        ING --> SK
-        ING --> TR
         AG --> SK
+        I --> SK
     end
-
-    subgraph ext["外部服务"]
+    subgraph ext["外部"]
         ES[(Elasticsearch)]
-        DS[DashScope API]
+        DS[DashScope]
     end
-
     VS --> ES
-    EM --> DS
+    SK --> DS
     AG --> DS
-    MAINT --> ES
+    M --> ES
 ```
 
-| 层级 | 谁 | 做什么 | 本仓库里的入口 |
-|------|-----|--------|----------------|
-| **业务层** | Spring Boot | 接 HTTP、校验参数、按 `doc_id` 删旧数据 | `Kb*Controller`、`IngestService` |
-| **RAG 编排层** | `SimpleKnowledge` | 文本 → 向量 → 存入/查出 Store | `KnowledgeConfiguration` → `kbKnowledge` |
-| **向量库层** | `ElasticsearchStore` | kNN 相似度检索、bulk 写入 | `StoreConfiguration` → `elasticsearchStore` |
-| **运维补丁** | `ElasticsearchDocMaintenance` | 按 `doc_id` 批量删除（SDK 没封装） | `store/ElasticsearchDocMaintenance` |
-| **对话层** | `ReActAgent` | 检索 + 生成回答（GENERIC/AGENTIC） | `ReActAgentConfiguration` |
+| 层级 | 组件 | 职责 |
+|------|------|------|
+| 接入层 | `web/*Controller` | REST、参数校验（`@Valid`）、Swagger |
+| 入库 | `IngestService` | 删旧 chunk → `TextReader` 分块 → 绑定 `doc_id` → `addDocuments` |
+| 检索 | `KbRetrieveService` | 调用 `kbKnowledge.retrieve`，限制 `limit≤100` |
+| 对话 | `KbChatService` + `ReActAgent` | GENERIC 下自动先检索再生成 |
+| ES 运维 | `ElasticsearchDocMaintenance` | `delete_by_query`、`/_count`、ping（REST，补 SDK 缺口） |
+| 向量库 | `ElasticsearchStore` | bulk 写入、`knn` 检索（`numCandidates=max(limit×2,50)`） |
+| 编排 | `SimpleKnowledge` | 对每段文本 `embed` 后交给 Store |
 
-**重要**：向量检索算法在 AgentScope 的 `ElasticsearchStore` 里，不在 `IngestService` 里。本工程**没有自研 ANN**，只选 Store 类型并补 ES 运维 API。
-
-### 2.2 一条文档从进入到可检索
+### 入库链路
 
 ```mermaid
 sequenceDiagram
-    participant U as 调用方
-    participant C as KbIngestController
+    participant API as POST /documents
     participant I as IngestService
     participant R as TextReader
     participant K as SimpleKnowledge
-    participant E as DashScope Embedding
     participant ES as Elasticsearch
 
-    U->>C: POST /documents {docId, text, payload}
-    C->>I: ingest()
-    Note over I: 若 replace：delete_by_query(doc_id)
-    I->>R: 按段落切成 chunk 0,1,2...
+    API->>I: docId + title + text + payload
+    I->>I: delete_by_query(doc_id) 可选
+    I->>R: 按段落切块
     I->>K: addDocuments(chunks)
-    loop 每个 chunk
-        K->>E: embed(文本)
-        E-->>K: 1024 维向量
-    end
-    K->>ES: bulk 写入 dense_vector
-    ES-->>U: docId + chunkCount
+    Note over K: 每 chunk 调 DashScope embed
+    K->>ES: bulk 写入 vector + metadata
 ```
 
-**三个 ID 别搞混**：
+**三个 ID**：
 
-| 名称 | 含义 | 例子 |
-|------|------|------|
-| `doc_id` | 业务上的一篇文档 | `hr-leave-policy-v1`、`faq-001` |
-| `chunk_id` | 一篇文档切成的第几段 | `0`、`1`、`2` |
-| ES `_id` | 每个 chunk 在 ES 里的唯一键 | 由 AgentScope 根据内容自动生成 UUID |
-
-更新同一篇文档：先按 `doc_id` **删掉 ES 里所有旧 chunk**，再重新切块、向量化、写入。
-
-### 2.3 检索与对话
-
-**纯检索** `POST /api/v1/kb/retrieve`：
-
-1. 用户问题 → Embedding 成向量  
-2. ES **kNN** 找最相似的几个 chunk  
-3. 按 `scoreThreshold`（默认 0.35）过滤，返回文本 + 分数  
-
-**RAG 对话** `POST /api/v1/kb/chat`：
-
-1. `ReActAgent` 在 **GENERIC** 模式下，会在调大模型前**自动**先检索知识库  
-2. 把检索到的片段塞进上下文，再让 `qwen-plus` 回答  
-3. System Prompt 要求：无依据不编造  
-
-```mermaid
-sequenceDiagram
-    participant U as 用户
-    participant A as ReActAgent
-    participant K as SimpleKnowledge
-    participant ES as Elasticsearch
-    participant L as DashScope Chat
-
-    U->>A: POST /chat {message}
-    A->>K: retrieve(问题)  GENERIC 模式
-    K->>ES: kNN
-    ES-->>K: Top-K chunks
-    K-->>A: 知识片段
-    A->>L: 带片段的 prompt
-    L-->>A: 回答
-    A-->>U: answer
-```
-
-### 2.4 ES 里一条记录长什么样
-
-索引由 `ElasticsearchStore` 启动时自动创建（`dense_vector` + cosine）：
-
-| 字段 | 作用 |
+| 字段 | 含义 |
 |------|------|
-| `doc_id` | 逻辑文档 ID，删除/更新时用 |
-| `chunk_id` | 块序号 |
-| `content` | 原文（JSON 存的 TextBlock） |
-| `vector` | 1024 维向量，检索用 |
-| `payload` | 自定义元数据（来源、分类等） |
+| `doc_id` | 业务文档 ID，更新/删除粒度 |
+| `chunk_id` | 分块序号 `0,1,2…` |
+| ES `_id` | chunk 级 UUID（AgentScope 按内容生成） |
 
-本阶段**只做向量检索（kNN）**，不做 BM25 全文检索。
+### 检索链路（kNN + 阈值）
+
+1. 问题文本 → **Embedding** → 查询向量  
+2. ES **kNN**：在 `dense_vector` 上找 Top-K（近似最近邻，由 ES/HNSW 完成）  
+3. `SimpleKnowledge` 再按 **`scoreThreshold`**（默认 0.35）过滤  
+
+**注意 `limit` 参数**：
+
+- 业务含义：返回几条结果（Top-K）  
+- AgentScope 内部：`numCandidates = max(limit × 2, 50)`  
+- ES 限制：`num_candidates ≤ 10000` → 理论上 `limit` 不能超过 5000  
+- 本服务 API：**`limit` 限制在 1～100**（`RetrieveRequest` + `KbRetrieveService`），避免误填导致 ES 报错  
+
+### 对话链路（RAG）
+
+- 默认 **`agentscope.agent.rag-mode: GENERIC`**：每次 `POST /chat` 会先检索知识库，再调用 `qwen-plus`  
+- 对话用的检索参数来自 **`agentscope.agent.retrieve`**（默认 `limit: 3`），与 `/kb/retrieve` 的默认 `limit: 5` **相互独立**  
+- 会话记忆为进程内 **`InMemoryMemory`**，**无 `sessionId` 持久化**（重启或多实例不共享）
+
+### ES 索引字段（自动创建）
+
+| 字段 | 说明 |
+|------|------|
+| `doc_id` / `chunk_id` | 逻辑 ID |
+| `content` | 原文（TextBlock JSON） |
+| `vector` | 1024 维，`cosine` |
+| `payload` | 自定义元数据 JSON |
+
+当前**仅 kNN 向量检索**，未做 BM25 混合检索。
 
 ---
 
-## 三、项目结构（按职责看）
+## 代码审视结论
 
-```
-03-simple-es-code/
-├── config/          # Bean 装配：ES Store、Embedding、Agent、分块参数
-├── ingest/          # 入库核心：doc_id + 正文 → chunks → addDocuments
-├── retrieve/        # 检索封装
-├── chat/            # 对话封装
-├── store/           # ES 运维：delete_by_query、_count、ping
-├── faq/             # 可选：classpath FAQ → 走同一套 IngestService
-├── web/             # REST + DTO
-├── health/          # Actuator 健康检查
-└── resources/
-    ├── application.yml
-    └── faq/faq-items.json
-```
+> 基于当前 `main` 分支实现（2026-05），供维护与扩展参考。
 
-**FAQ 不是第二条链路**：`FaqBootstrapAdapter` 把每条 FAQ 转成 `docId=faq.id` 的文本，仍调用 `IngestService.ingest()`，和通用文档入库相同。
+### 已做对的部分
+
+| 点 | 说明 |
+|----|------|
+| 向量库选型清晰 | `StoreConfiguration` 一处切换 `ElasticsearchStore` / `InMemoryStore` |
+| 统一入库 | FAQ 与通用文档都走 `IngestService`，避免两套逻辑 |
+| 按 doc 更新 | ES 模式先 `delete_by_query` 再写入，避免重复 chunk 堆积 |
+| Agent 装配 | `@DependsOn("kbKnowledge")`，避免 `ConditionalOnBean` 整类跳过 |
+| 依赖版本 | `pom.xml` 锁定 ES 客户端 **9.3.3 + rest5-client**，避免 Spring Boot 8.x 缺 `Rest5Client` |
+| 检索防护 | `limit` 上限 100，规避 `num_candidates` 超限 |
+| 可观测 | Actuator + `KbElasticsearchHealthIndicator`（ES ping、文档数） |
+
+### 当前局限（有意未做）
+
+| 点 | 影响 |
+|----|------|
+| 同步阻塞入库/检索 | `addDocuments().block()`，大文档会占用 HTTP 线程 |
+| 无鉴权 | 所有 API 对可达网络开放，生产需网关或 Spring Security |
+| 无混合检索 / Rerank | 专有名词、错误码场景召回可能偏弱 |
+| `store-type=memory` | 不支持按 `doc_id` 删除，重复入库会叠 chunk |
+| 双连接 ES | `ElasticsearchStore`（SDK）+ `ElasticsearchDocMaintenance`（JDK HttpClient）各一条 |
+| 内存会话 | 多轮指代、跨实例会话需后续自建会话服务 |
+| `KbIndexRegistry` 计数 | 与 ES `_count` 可能不一致；**以 `/status` 的 `elasticsearchDocumentCount` 为准** |
+
+### 安全提醒
+
+- **勿将真实 `DASHSCOPE_API_KEY` 写入 `application.yml` 并提交 Git**；请用环境变量 `export DASHSCOPE_API_KEY=...`  
+- `application.yml` 默认仅为占位符 `sk-your-dashscope-api-key`
 
 ---
 
-## 四、配置说明（看懂 yml 即可调参）
+## 项目结构与关键类
+
+```
+src/main/java/io/agentscope/rag/kb/
+├── SimpleKbApplication.java
+├── config/
+│   ├── StoreConfiguration.java      # elasticsearchStore / kbVectorStore
+│   ├── KnowledgeConfiguration.java  # kbKnowledge, TextReader, RetrieveConfig
+│   ├── ReActAgentConfiguration.java # kbAssistantAgent
+│   └── SimpleRagProperties.java     # store-type, es, reader, retrieve
+├── ingest/IngestService.java        # 入库核心
+├── retrieve/KbRetrieveService.java
+├── chat/KbChatService.java
+├── store/ElasticsearchDocMaintenance.java
+├── faq/FaqBootstrapAdapter.java     # FAQ → IngestService
+└── web/                             # REST + DTO + GlobalExceptionHandler
+```
+
+| 包 | 关键 Bean / 类 |
+|----|----------------|
+| `config` | `kbKnowledge`, `elasticsearchStore`, `kbAssistantAgent` |
+| `ingest` | `IngestService`, `DocumentIngestRequest` |
+| `store` | `ElasticsearchDocMaintenance`（仅 `store-type=elasticsearch`） |
+| `faq` | `FaqBootstrapRunner`（`FAQ_BOOTSTRAP=true` 时执行） |
+
+---
+
+## 配置说明
 
 ```yaml
 agentscope:
   rag:
     simple:
-      store-type: elasticsearch      # memory = 单测/无 ES
+      store-type: elasticsearch
       embedding:
-        dimensions: 1024             # 必须与 ES 索引、模型一致
+        api-key: ${DASHSCOPE_API_KEY}    # 必填（入库/向量化）
+        dimensions: 1024                 # 改维度须删 ES 索引重建
       elasticsearch:
         url: http://localhost:9200
         index-name: agentscope_kb
       reader:
-        chunk-size: 1024             # 切块大小
-        chunk-overlap: 50            # 块之间重叠字数
-      retrieve:
+        chunk-size: 1024
+        chunk-overlap: 50
+      retrieve:                          # 仅影响 POST /kb/retrieve
         limit: 5
-        score-threshold: 0.35        # 相似度低于此的结果丢弃
+        score-threshold: 0.35
   agent:
-    rag-mode: GENERIC                # 或 AGENTIC（Agent 自己决定何时检索）
+    enabled: true
+    dashscope-api-key: ${DASHSCOPE_API_KEY}
+    rag-mode: GENERIC                    # GENERIC | AGENTIC
+    retrieve:                            # 仅影响 POST /kb/chat
+      limit: 3
+      score-threshold: 0.35
 ```
 
-| 环境变量 | 作用 |
+| 环境变量 | 说明 |
 |----------|------|
-| `DASHSCOPE_API_KEY` | Embedding + Chat（必填才能入库/对话） |
-| `ES_URL` / `ES_INDEX` | Elasticsearch 地址与索引名 |
-| `FAQ_BOOTSTRAP=true` | 启动时导入 `faq-items.json` |
-| `RAG_STORE_TYPE=memory` | 不连 ES，仅内存（测试用） |
+| `DASHSCOPE_API_KEY` | Embedding + Chat |
+| `ES_URL` / `ES_INDEX` | Elasticsearch |
+| `FAQ_BOOTSTRAP=true` | 启动时加载 `faq-items.json` |
+| `RAG_STORE_TYPE=memory` | 单测/无 ES（`mvn test` 默认） |
+| `AGENT_RAG_MODE` | `GENERIC` / `AGENTIC` |
 
-**Maven 依赖**：须使用 `elasticsearch-java` + `elasticsearch-rest5-client` **9.3.3**（`pom.xml` 已锁定）。Spring Boot 默认 8.15.x 会缺 `Rest5Client` 导致启动失败。
+**Maven**：`elasticsearch-java` + `elasticsearch-rest5-client` 版本 **9.3.3**（见 `pom.xml`）。
 
 ---
 
-## 五、快速开始
+## 快速开始
 
-### 前置
-
-- JDK 17+
-- Elasticsearch（本地示例 9.4.1）
+### 1. 启动 Elasticsearch
 
 ```bash
 docker run -d --name elasticsearch -p 9200:9200 \
@@ -231,110 +248,121 @@ docker run -d --name elasticsearch -p 9200:9200 \
   elasticsearch:9.4.1
 ```
 
-### 启动
+### 2. 启动应用
 
 ```bash
 export DASHSCOPE_API_KEY=sk-your-key
 export ES_URL=http://localhost:9200
-# 可选：首次导入示例 FAQ
-export FAQ_BOOTSTRAP=true
+export FAQ_BOOTSTRAP=true   # 可选：导入示例 FAQ
 
 cd 03-simple-es-code
 mvn clean spring-boot:run
 ```
 
-- Swagger：http://localhost:8082/swagger-ui.html  
-- 健康：http://localhost:8082/actuator/health  
+| 入口 | URL |
+|------|-----|
+| Swagger | http://localhost:8082/swagger-ui.html |
+| 健康检查 | http://localhost:8082/actuator/health |
+| 索引状态 | http://localhost:8082/api/v1/kb/status |
 
-### 典型操作
-
-**1. 入库一篇制度**
+### 3. 验证流程
 
 ```bash
+# 入库
 curl -s -X POST http://localhost:8082/api/v1/kb/documents \
   -H 'Content-Type: application/json' \
-  -d '{
-    "docId": "hr-leave-policy-v1",
-    "title": "年假制度",
-    "text": "员工入职满一年可享受带薪年假。未休年假最多结转5天。",
-    "payload": {"source": "wiki", "category": "HR"}
-  }'
-```
+  -d '{"docId":"demo-1","text":"年假最多结转5天到次年3月底。"}'
 
-**2. 检索**
-
-```bash
+# 检索（limit 建议 3～10）
 curl -s -X POST http://localhost:8082/api/v1/kb/retrieve \
   -H 'Content-Type: application/json' \
-  -d '{"query": "年假可以结转吗", "limit": 3}'
-```
+  -d '{"query":"年假结转","limit":5}'
 
-**3. 对话**
-
-```bash
+# 对话
 curl -s -X POST http://localhost:8082/api/v1/kb/chat \
   -H 'Content-Type: application/json' \
-  -d '{"message": "年假可以结转吗"}'
+  -d '{"message":"年假可以结转吗"}'
 ```
 
-**4. 查看 ES 状态**
+### 4. 测试
 
 ```bash
-curl -s http://localhost:8082/api/v1/kb/status | jq .
+mvn test   # 使用 store-type=memory，无需 ES
 ```
 
 ---
 
-## 六、API 一览
+## API 说明
 
-### `/api/v1/kb`（通用知识库）
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/documents` | 新文档入库 |
-| PUT | `/documents/{docId}` | 覆盖更新（先删后写） |
-| DELETE | `/documents/{docId}` | 删除该 doc 全部 chunk |
-| POST | `/retrieve` | 向量检索 |
-| POST | `/chat` | RAG 对话 |
-| GET | `/status` | ES 连通、索引名、文档数 |
-
-### `/api/v1/faq`（兼容旧路径）
+### `/api/v1/kb`
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/status` | 同 KB 状态 |
-| POST | `/reload` | 从 `faq-items.json` 重载进 ES |
+| POST | `/documents` | 新文档入库（201） |
+| PUT | `/documents/{docId}` | 覆盖更新 |
+| DELETE | `/documents/{docId}` | 按 `doc_id` 删除全部 chunk |
+| POST | `/retrieve` | 向量检索，`limit` 1～100 |
+| POST | `/chat` | RAG 对话（需 Agent 与 Key） |
+| GET | `/status` | ES 状态、文档数、最近入库信息 |
+
+**入库体示例**：
+
+```json
+{
+  "docId": "hr-leave-policy-v1",
+  "title": "年假制度",
+  "text": "正文内容……",
+  "payload": { "source": "wiki", "category": "HR" }
+}
+```
+
+**检索体示例**：
+
+```json
+{
+  "query": "年假可以结转吗",
+  "limit": 5,
+  "scoreThreshold": 0.35
+}
+```
+
+### `/api/v1/faq`（兼容）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/status` | 同 KB |
+| POST | `/reload` | 重载 `classpath:faq/faq-items.json` → ES |
 
 ---
 
-## 七、常见问题
+## 常见问题
 
 | 现象 | 原因 | 处理 |
 |------|------|------|
-| `Rest5Client` ClassNotFound | Spring Boot 拉了 ES 8.x 客户端 | `mvn clean` 后重编，确认依赖树为 9.3.3 |
-| 检索/对话提示知识库为空 | ES 索引无数据 | 先 `POST /documents` 或 `POST /faq/reload` |
-| 重启后数据还在 | 正常，向量在 ES 里 | 与 02 内存版不同 |
-| 重复入库同一 `docId` 变多份 | 未走 PUT/先删 | 用 PUT 或 ingest 时 `replaceExisting=true` |
-| Chat 不可用 | Agent 未配置 Key | 设置 `DASHSCOPE_API_KEY`，`agentscope.agent.enabled=true` |
-| `num_candidates cannot exceed [10000]` | `limit` 过大（Store 里 `numCandidates=limit×2`） | `limit` 用 1～100，默认 5 即可 |
+| `Rest5Client` ClassNotFound | ES 客户端 8.x | `mvn clean compile`，确认依赖为 9.3.3 |
+| `num_candidates cannot exceed [10000]` | `limit` 过大 | API 使用 1～100；勿在 Swagger 填超大 limit |
+| 知识库为空 | ES 无数据 | `POST /documents` 或 `POST /faq/reload` |
+| 检索无结果 | 阈值过高或未入库 | 降低 `scoreThreshold` 或先 `/status` 看 `documentCount` |
+| Chat 报错 / Agent 未创建 | Key 无效或占位符 | 设置有效 `DASHSCOPE_API_KEY` |
+| 重启后数据仍在 | ES 持久化 | 正常；清索引需删 ES index 或按 doc DELETE |
+| PUT 与 POST 区别 | 更新语义 | PUT 强制 `docId` 与路径一致并先删后写 |
 
 ---
 
-## 八、与 `02-simple-kg-code` 对比
+## 与 `02-simple-kg-code` 对比
 
-| | 02（PoC） | 03（本工程） |
-|--|-----------|--------------|
-| 向量存哪 | 进程内存 `InMemoryStore` | Elasticsearch |
-| 重启 | 索引丢失 | 数据保留 |
-| 数据入口 |  mainly FAQ JSON | 任意文本 API + 可选 FAQ |
-| 更新方式 | `clear()` 全表清空再加载 | 按 `doc_id` 删除再写入 |
-| 多实例 | 各实例内存不一致 | 共享同一 ES 索引 |
+| 维度 | 02 PoC | 03 本工程 |
+|------|--------|-----------|
+| 向量存储 | `InMemoryStore` | `ElasticsearchStore` |
+| 持久化 | 否 | 是 |
+| 数据入口 |  mainly FAQ | 通用 API + 可选 FAQ |
+| 文档更新 | `clear()` 全量 | 按 `doc_id` 删除再写 |
+| 多实例 | 内存不一致 | 共享 ES 索引 |
 
 ---
 
-## 九、参考
+## 参考
 
-- [README-vES.md](../README-vES.md) — 方案、工业级差距、向量库落点  
-- [03-es-ingest-sample](../03-es-ingest-sample/) — 无 Spring 的入库演示 main  
-- [AgentScope RAG 文档](https://java.agentscope.io/zh/task/rag.html)  
-- [ElasticsearchRAGExample](https://github.com/agentscope-ai/agentscope-java)（官方 ES 示例）  
+- [README-vES.md](../README-vES.md) — 方案与演进路线  
+- [03-es-ingest-sample](../03-es-ingest-sample/) — 无 Spring 的入库 main 示例  
+- [AgentScope RAG 文档](https://java.agentscope.io/zh/task/rag.html)
