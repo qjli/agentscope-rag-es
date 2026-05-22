@@ -6,6 +6,10 @@ spring:
     name: simple-es-rag
   mvc:
     throw-exception-if-no-handler-found: true
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 55MB
 
 management:
   endpoints:
@@ -58,6 +62,11 @@ agentscope:
     system-prompt: |
       你是企业知识库助手。请严格依据检索到的知识库内容回答；
       若知识库无相关内容，请明确告知用户并建议联系人工客服，不要编造。
+
+agentscope.rag.ops:
+  data-dir: ${RAG_OPS_DATA_DIR:./data}
+  upload-dir: ${RAG_OPS_UPLOAD_DIR:./data/uploads}
+  registry-file: ${RAG_OPS_REGISTRY_FILE:./data/knowledge-bases.json}
 
 logging:
   level:

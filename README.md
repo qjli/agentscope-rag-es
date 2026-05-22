@@ -11,7 +11,7 @@
 | Embedding | DashScope `text-embedding-v3`，**1024 维** |
 | 仓库 | https://github.com/qjli/agentscope-rag-es |
 
-方案设计见 [README-vES.md](../README-vES.md)。
+方案设计见 [README-vES.md](../README-vES.md)。入库链路优化见 [README-optimize.md](./README-optimize.md)。
 
 ---
 
@@ -26,6 +26,8 @@
 7. [API 说明](#api-说明)
 8. [常见问题](#常见问题)
 9. [与 02 对比](#与-02-simple-kg-code-对比)
+10. [入库优化指南](./README-optimize.md)（独立文档）
+11. [运维 UI](#运维-uifrontend)（`frontend/`）
 
 ---
 
@@ -261,9 +263,32 @@ mvn clean spring-boot:run
 
 | 入口 | URL |
 |------|-----|
+| **运维 UI** | http://localhost:8082/ops/ |
 | Swagger | http://localhost:8082/swagger-ui.html |
 | 健康检查 | http://localhost:8082/actuator/health |
 | 索引状态 | http://localhost:8082/api/v1/kb/status |
+
+### 运维 UI（`frontend/`）
+
+RAG 维度 Dashboard：多知识库（ES `index-name`）、文档入库/覆盖/删除、按知识库对话。
+
+```bash
+# 构建前端（产物由 Spring 静态托管到 /ops/）
+cd frontend && npm install && npm run build
+
+# 或开发模式（Vite 代理 /api → 8082）
+cd frontend && npm run dev
+# 访问 http://localhost:5173/ops/
+```
+
+| 能力 | 说明 |
+|------|------|
+| 新建知识库 | 绑定独立 ES `index-name` |
+| 物料入库 | **TextReader** / **WordReader**（.docx）/ **PdfReader**（AgentScope `PDFReader`，.pdf） |
+| 文档运维 | 覆盖更新（先删 chunk 再入库）、按 `doc_id` 删除全部 chunk |
+| AI 对话 | 顶部选择知识库 → `POST /api/v1/ops/knowledge-bases/{kbId}/chat` |
+
+Ops API 前缀：`/api/v1/ops/knowledge-bases`。详见 [frontend/README.md](./frontend/README.md)。
 
 ### 3. 验证流程
 

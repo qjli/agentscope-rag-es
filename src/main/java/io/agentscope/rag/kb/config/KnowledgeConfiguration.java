@@ -6,7 +6,10 @@ import io.agentscope.core.rag.Knowledge;
 import io.agentscope.core.rag.knowledge.SimpleKnowledge;
 import io.agentscope.core.rag.model.RetrieveConfig;
 import io.agentscope.core.rag.reader.SplitStrategy;
+import io.agentscope.core.rag.reader.TableFormat;
 import io.agentscope.core.rag.reader.TextReader;
+import io.agentscope.core.rag.reader.PDFReader;
+import io.agentscope.core.rag.reader.WordReader;
 import io.agentscope.core.rag.store.VDBStoreBase;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,6 +55,27 @@ public class KnowledgeConfiguration {
 
     @Bean
     public TextReader kbTextReader(SimpleRagProperties properties) {
+        return buildTextReader(properties);
+    }
+
+    @Bean
+    public WordReader kbWordReader(SimpleRagProperties properties) {
+        SimpleRagProperties.ReaderProperties reader = properties.getReader();
+        SplitStrategy strategy =
+                reader.getSplitStrategy() != null ? reader.getSplitStrategy() : SplitStrategy.PARAGRAPH;
+        return new WordReader(
+                reader.getChunkSize(), strategy, reader.getChunkOverlap(), false, false, TableFormat.MARKDOWN);
+    }
+
+    @Bean
+    public PDFReader kbPdfReader(SimpleRagProperties properties) {
+        SimpleRagProperties.ReaderProperties reader = properties.getReader();
+        SplitStrategy strategy =
+                reader.getSplitStrategy() != null ? reader.getSplitStrategy() : SplitStrategy.PARAGRAPH;
+        return new PDFReader(reader.getChunkSize(), strategy, reader.getChunkOverlap(), false);
+    }
+
+    static TextReader buildTextReader(SimpleRagProperties properties) {
         SimpleRagProperties.ReaderProperties reader = properties.getReader();
         SplitStrategy strategy =
                 reader.getSplitStrategy() != null ? reader.getSplitStrategy() : SplitStrategy.PARAGRAPH;

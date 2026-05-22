@@ -10,9 +10,11 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -36,10 +38,17 @@ public class ElasticsearchDocMaintenance {
     private final ObjectMapper objectMapper;
     private final String authHeader;
 
+    @Autowired
     public ElasticsearchDocMaintenance(SimpleRagProperties properties, ObjectMapper objectMapper) {
+        this(properties, objectMapper, properties.getElasticsearch().getIndexName());
+    }
+
+    /** 由 {@link io.agentscope.rag.kb.ops.KnowledgeBaseRegistry} 按索引名创建，非 Spring Bean。 */
+    public ElasticsearchDocMaintenance(
+            SimpleRagProperties properties, ObjectMapper objectMapper, String indexName) {
         SimpleRagProperties.ElasticsearchProperties es = properties.getElasticsearch();
         this.baseUrl = stripTrailingSlash(es.getUrl());
-        this.indexName = es.getIndexName();
+        this.indexName = indexName;
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
         if (es.hasCredentials()) {
@@ -136,6 +145,89 @@ public class ElasticsearchDocMaintenance {
 
     public String getBaseUrl() {
         return baseUrl;
+    }
+
+    public long countUniqueDocIds() {
+        if (!indexExists()) {
+            return 0;
+        }
+        try {
+            String body =
+                    objectMapper.writeValueAsString(
+                            Map.of(
+                                    "size",
+                                    0,
+                                    "aggs",
+                                    Map.of(
+                                            "unique_docs",
+                                            Map.of("cardinality", Map.of("field", "doc_id")))));
+            HttpResponse<String> response =
+                    httpClient.send(
+                            request("/" + indexName + "/_search")
+                                    .header("Content-Type", "application/json")
+                                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                                    .build(),
+                            HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 300) {
+                return -1;
+            }
+            JsonNode root = objectMapper.readTree(response.body());
+            return root.path("aggregations").path("unique_docs").path("value").asLong(0);
+        } catch (Exception e) {
+            log.warn("ES unique doc_id count failed: {}", e.getMessage());
+            return -1;
+        }
+    }
+
+    public JsonNode searchDocuments(int size) {
+        try {
+            if (!indexExists()) {
+                return objectMapper.createObjectNode().put("total", 0);
+            }
+            String body =
+                    objectMapper.writeValueAsString(
+                            Map.of(
+                                    "size",
+                                    0,
+                                    "aggs",
+                                    Map.of(
+                                            "by_doc",
+                                            Map.of(
+                                                    "terms",
+                                                    Map.of("field", "doc_id", "size", size),
+                                                    "aggs",
+                                                    Map.of(
+                                                            "chunk_count",
+                                                            Map.of("value_count", Map.of("field", "doc_id")),
+                                                            "sample",
+                                                            Map.of(
+                                                                    "top_hits",
+                                                                    Map.of(
+                                                                            "size",
+                                                                            1,
+                                                                            "_source",
+                                                                            Map.of(
+                                                                                    "includes",
+                                                                                    List.of(
+                                                                                            "doc_id",
+                                                                                            "chunk_id",
+                                                                                            "payload")))))))));
+            HttpResponse<String> response =
+                    httpClient.send(
+                            request("/" + indexName + "/_search")
+                                    .header("Content-Type", "application/json")
+                                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                                    .build(),
+                            HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 300) {
+                throw new IllegalStateException("search failed: HTTP " + response.statusCode());
+            }
+            return objectMapper.readTree(response.body());
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to list documents for index=" + indexName, e);
+        }
     }
 
     private HttpRequest.Builder request(String path) {
